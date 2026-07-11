@@ -1,0 +1,14 @@
+.DS_Store
+.idea/
+
+# Build output and boot images
+cmake-build-debug/
+*.o
+*.elf
+*.bin
+*.img
+
+# Local QEMU downloads and extracted source trees
+qemu-*/
+qemu-*.tar.xz
+qemu-*.zip
