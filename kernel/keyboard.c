@@ -17,6 +17,7 @@ static int history_cursor = -1;
 static int edit_cursor = 0;
 static int rendered_length = 0;
 static uint8_t extended_scancode = 0;
+static uint8_t shift_pressed = 0;
 
 const char kbd_us[128] = {
     0, 27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
@@ -25,6 +26,36 @@ const char kbd_us[128] = {
     0, '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0,
     '*', 0, ' ', 0
 };
+
+static char shifted_key(char key) {
+    if (key >= 'a' && key <= 'z') {
+        return (char)(key - 'a' + 'A');
+    }
+    switch (key) {
+        case '1': return '!';
+        case '2': return '@';
+        case '3': return '#';
+        case '4': return '$';
+        case '5': return '%';
+        case '6': return '^';
+        case '7': return '&';
+        case '8': return '*';
+        case '9': return '(';
+        case '0': return ')';
+        case '-': return '_';
+        case '=': return '+';
+        case '[': return '{';
+        case ']': return '}';
+        case '\\': return '|';
+        case ';': return ':';
+        case '\'': return '"';
+        case '`': return '~';
+        case ',': return '<';
+        case '.': return '>';
+        case '/': return '?';
+        default: return key;
+    }
+}
 
 static void copy_line(char *destination, const char *source) {
     int i = 0;
@@ -145,6 +176,7 @@ static void backspace_character(void) {
         return;
     }
     edit_cursor--;
+    vga_move_cursor_left();
     delete_character();
 }
 
@@ -165,6 +197,17 @@ void keyboard_handler(void) {
         return;
     }
 
+    if (scancode == 0x2A || scancode == 0x36) {
+        shift_pressed = 1;
+        outb(0x20, 0x20);
+        return;
+    }
+    if (scancode == 0xAA || scancode == 0xB6) {
+        shift_pressed = 0;
+        outb(0x20, 0x20);
+        return;
+    }
+
     if (!(scancode & 0x80) && !command_ready) {
         if (extended_scancode) {
             switch (scancode) {
@@ -174,10 +217,14 @@ void keyboard_handler(void) {
                 case 0x4F: while (edit_cursor < buffer_idx) { edit_cursor++; vga_move_cursor_right(); } break;
                 case 0x48: history_up(); break;
                 case 0x50: history_down(); break;
+                /* E0 53 is the extended Delete key; remove at the cursor. */
                 case 0x53: delete_character(); break;
             }
         } else {
             char key = kbd_us[scancode];
+            if (shift_pressed) {
+                key = shifted_key(key);
+            }
             if (key == '\n') {
                 while (edit_cursor < buffer_idx) {
                     edit_cursor++;
@@ -190,6 +237,7 @@ void keyboard_handler(void) {
                 print_char('\n');
             }
             else if (key == '\b') {
+                /* Backspace removes the character immediately left of the cursor. */
                 backspace_character();
             }
             else if (key != 0) {

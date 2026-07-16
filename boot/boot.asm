@@ -10,6 +10,10 @@ KERNEL_SECTORS equ 128
 VGA_PROGRESS equ 0x0F
 VGA_FATAL    equ 0x0C
 
+MEMORY_MAP_ADDR        equ 0x5000
+MEMORY_MAP_ENTRIES     equ MEMORY_MAP_ADDR + 8
+MEMORY_MAP_MAX_ENTRIES equ 32
+
 start:
     mov [BOOT_DRIVE], dl
 
@@ -29,6 +33,10 @@ start:
     ; Reset ES back to 0 before BIOS disk calls
     xor ax, ax
     mov es, ax
+
+    ; Query the BIOS E820 map while BIOS services are still available. The
+    ; kernel reads this fixed, identity-mapped buffer after entering long mode.
+    call detect_memory_map
 
     ; Reset the disk system before issuing extended LBA reads.
     xor ah, ah
@@ -90,6 +98,34 @@ disk_error:
     mov word [es:0x00], (VGA_FATAL << 8) | 'D'
     hlt
     jmp $
+
+detect_memory_map:
+    xor ax, ax
+    mov es, ax
+    mov dword [MEMORY_MAP_ADDR], 0
+    mov dword [MEMORY_MAP_ADDR + 4], 0
+    xor ebx, ebx
+    mov di, MEMORY_MAP_ENTRIES
+
+.next_entry:
+    mov dword [es:di + 20], 1
+    mov eax, 0xE820
+    mov edx, 0x534D4150             ; "SMAP"
+    mov ecx, 24
+    int 0x15
+    jc .done
+    cmp eax, 0x534D4150
+    jne .done
+
+    inc dword [MEMORY_MAP_ADDR]
+    add di, 24
+    cmp dword [MEMORY_MAP_ADDR], MEMORY_MAP_MAX_ENTRIES
+    jae .done
+    test ebx, ebx
+    jnz .next_entry
+
+.done:
+    ret
 
 BOOT_DRIVE: db 0
 

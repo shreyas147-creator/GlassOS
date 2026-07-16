@@ -27,10 +27,17 @@ init_pm:
     or eax, 0x3
     mov [pdpt_table], eax
 
+    ; Identity-map the first GiB with 2 MiB pages.  The kernel's physical
+    ; allocator only hands out frames in this window, so every returned frame
+    ; is immediately addressable while the VM subsystem is still absent.
     mov edi, pde_table
-    mov eax, 0x00000000
-    or eax, 0x83                ; 2MB Huge Page
+    mov eax, 0x00000083          ; Present | writable | 2 MiB page
+    mov ecx, 512
+.map_identity_pages:
     mov [edi], eax
+    add eax, 0x200000
+    add edi, 8
+    loop .map_identity_pages
 
     mov eax, pml4_table
     mov cr3, eax
