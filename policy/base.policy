@@ -17,6 +17,7 @@ allow shell config:get *
 allow shell config:set *
 allow shell policy:show policy/base.policy
 allow shell policy:change policy/base.policy
+allow shell process:load /bin/hello
 allow * syscall:inspect *
 allow * syscall:yield *
 allow * syscall:config_get *

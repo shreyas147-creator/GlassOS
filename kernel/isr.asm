@@ -210,6 +210,9 @@ syscall_isr_wrapper:
 
     mov rdi, [rsp + 112]        ; saved user rax = syscall number
     mov rsi, [rsp + 128]        ; saved user cs
+    mov rdx, [rsp + 64]         ; arg0: saved user rdi
+    mov rcx, [rsp + 72]         ; arg1: saved user rsi
+    mov r8, [rsp + 96]          ; arg2: saved user rdx
     call user_syscall_trap
 
     pop r15

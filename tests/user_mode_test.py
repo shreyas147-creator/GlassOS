@@ -130,19 +130,34 @@ def main():
             events = parse_events(text)
             require(matching(events, kind="state", actor="scheduler", target="process/1", op="process_create", result="ok"),
                     "missing process creation event")
+            require(matching(events, kind="state", actor="scheduler", target="process/2", op="process_create", result="ok"),
+                    "missing peer process creation event")
             require(matching(events, kind="state", actor="scheduler", target="thread/1", op="thread_create", result="ok"),
                     "missing thread creation event")
+            require(matching(events, kind="state", actor="scheduler", target="address_space/1",
+                             op="address_space_create", result="ok"),
+                    "missing process address space creation event")
             require(matching(events, kind="state", actor="scheduler", target="thread/1", op="user_transition_scaffold", result="ok"),
                     "missing user transition scaffold event")
-            require(matching(events, kind="action", actor="memory", target="page_tables", op="map_user", result="ok",
+            require(matching(events, kind="state", actor="ramfs", target="/bin/hello", op="lookup", result="ok"),
+                    "missing RAMFS executable lookup")
+            require(matching(events, kind="state", actor="ramfs", target="/bin/hello", op="read", result="ok"),
+                    "missing RAMFS executable read")
+            require(matching(events, kind="action", actor="memory", target="page_tables", op="map_virtual", result="ok",
                              policy="allow:user-code-page"),
                     "missing user code page mapping event")
-            require(matching(events, kind="action", actor="memory", target="page_tables", op="map_user", result="ok",
+            require(matching(events, kind="action", actor="memory", target="page_tables", op="map_virtual", result="ok",
                              policy="allow:user-stack-page"),
                     "missing user stack page mapping event")
+            require(matching(events, kind="action", actor="memory", target="page_tables", op="map_virtual", result="ok",
+                             policy="allow:user-private-page"),
+                    "missing peer private page mapping event")
             require(matching(events, kind="state", actor="scheduler", target="thread/1", op="enter_cpl3", result="ok",
                              policy="allow:user-enter"),
                     "missing CPL3 entry event")
+            require(matching(events, kind="action", actor="scheduler", target="address_space/1",
+                             op="switch_cr3", result="ok", policy="allow:process-cr3"),
+                    "missing process CR3 switch event")
 
             traps = matching(events, kind="syscall", actor="thread/1", target="kernel",
                              op="cpl3_trap", result="ok", policy="allow:cpl3")
@@ -162,11 +177,14 @@ def main():
             denied_tx = denied_policy[-1]["tx"]
             require(matching(events, tx=denied_tx, kind="transaction", actor="thread/1", op="abort", result="denied"),
                     "missing denied syscall abort")
-            faults = matching(events, kind="fault", actor="thread/1", target="kernel",
-                              op="page_fault", result="fault", policy="deny:user-page-fault")
+            faults = matching(events, kind="fault", actor="thread/1", target="process/2",
+                              op="isolation_fault", result="fault", policy="deny:address-space-isolation")
             require(faults,
-                    "missing contained user page fault event")
+                    "missing contained process isolation fault event")
             require("User page fault contained:" in text, "missing page fault containment log")
+            normalized_text = text.replace("\r", "").replace("\n", "")
+            require("policy=deny:address-space-isolation" in normalized_text,
+                    "missing isolation denial in containment log")
             fault_seq = int(faults[-1]["seq"])
             shell_commits = [
                 event for event in matching(events, kind="transaction", actor="shell",

@@ -11,6 +11,15 @@
 #define LOADER_RESERVED_END 0x200000ULL
 #define BOOT_STACK_RESERVED_START 0x2F0000ULL
 #define BOOT_STACK_RESERVED_END 0x300000ULL
+#define BOOTSTRAP_PML4 0x1000ULL
+#define BOOTSTRAP_PDPT 0x2000ULL
+#define BOOTSTRAP_PD 0x3000ULL
+#define BOOTSTRAP_PT0 0x4000ULL
+#define BOOTSTRAP_PT1 0x5000ULL
+#define PTE_PRESENT 0x001ULL
+#define PTE_WRITABLE 0x002ULL
+#define PTE_USER 0x004ULL
+#define PTE_NX 0x8000000000000000ULL
 
 static uint8_t page_bitmap[PAGE_BITMAP_SIZE];
 static uint8_t usable_bitmap[PAGE_BITMAP_SIZE];
@@ -19,6 +28,7 @@ static uint32_t detected_entry_count = 0;
 static uint64_t heap_base = 0;
 static uint64_t heap_limit = 0;
 static int allocator_ready = 0;
+static uint64_t kernel_cr3 = BOOTSTRAP_PML4;
 
 uint64_t heap_ptr = 0;
 
@@ -63,6 +73,21 @@ static uint64_t align_down(uint64_t value) {
 static void bitmap_fill(uint8_t *bitmap, uint8_t value) {
     for (uint64_t i = 0; i < PAGE_BITMAP_SIZE; i++) {
         bitmap[i] = value;
+    }
+}
+
+static void zero_page(uint64_t physical_address) {
+    uint8_t *page = (uint8_t *)physical_address;
+    for (uint64_t i = 0; i < PAGE_SIZE; i++) {
+        page[i] = 0;
+    }
+}
+
+static void copy_page(uint64_t destination_address, uint64_t source_address) {
+    uint64_t *destination = (uint64_t *)destination_address;
+    const uint64_t *source = (const uint64_t *)source_address;
+    for (uint64_t i = 0; i < PAGE_SIZE / sizeof(uint64_t); i++) {
+        destination[i] = source[i];
     }
 }
 
@@ -225,6 +250,108 @@ uint32_t memory_map_entry_count(void) {
 
 uint64_t memory_mapped_limit(void) {
     return IDENTITY_MAP_LIMIT;
+}
+
+uint64_t memory_kernel_address_space(void) {
+    return kernel_cr3;
+}
+
+uint64_t memory_current_address_space(void) {
+    uint64_t cr3;
+    __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
+    return cr3;
+}
+
+void memory_switch_address_space(uint64_t cr3, const char *actor,
+                                 const char *target, const char *policy) {
+    if (cr3 == 0) {
+        event_record(actor, target, "switch_cr3", EVENT_DENIED,
+                     event_current(), "deny:invalid-address-space");
+        return;
+    }
+    __asm__ volatile ("mov %0, %%cr3" : : "r"(cr3) : "memory");
+    event_record(actor, target, "switch_cr3", EVENT_OK, event_current(), policy);
+}
+
+uint64_t memory_create_address_space(const char *owner) {
+    uint64_t pml4_address = page_alloc();
+    uint64_t pdpt_address = page_alloc();
+    uint64_t pd_address = page_alloc();
+    uint64_t pt0_address = page_alloc();
+    uint64_t pt1_address = page_alloc();
+    if (pml4_address == 0 || pdpt_address == 0 || pd_address == 0 ||
+        pt0_address == 0 || pt1_address == 0) {
+        event_record("memory", owner, "address_space_create", EVENT_DENIED,
+                     event_current(), "deny:address-space-pages");
+        return 0;
+    }
+
+    zero_page(pml4_address);
+    zero_page(pdpt_address);
+    zero_page(pd_address);
+    copy_page(pt0_address, BOOTSTRAP_PT0);
+    copy_page(pt1_address, BOOTSTRAP_PT1);
+
+    volatile uint64_t *pml4 = (volatile uint64_t *)pml4_address;
+    volatile uint64_t *pdpt = (volatile uint64_t *)pdpt_address;
+    volatile uint64_t *pd = (volatile uint64_t *)pd_address;
+
+    pml4[0] = pdpt_address | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
+    pdpt[0] = pd_address | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
+    pd[0] = pt0_address | PTE_PRESENT | PTE_WRITABLE;
+    pd[1] = pt1_address | PTE_PRESENT | PTE_WRITABLE;
+
+    event_record("memory", owner, "address_space_create", EVENT_OK,
+                 event_current(), "allow:address-space");
+    return pml4_address;
+}
+
+int memory_map_process_page(uint64_t cr3, uint64_t virtual_address,
+                            uint64_t physical_address, int user,
+                            int writable, int executable,
+                            const char *policy) {
+    if (cr3 == 0 ||
+        (virtual_address & (PAGE_SIZE - 1)) != 0 ||
+        (physical_address & (PAGE_SIZE - 1)) != 0 ||
+        virtual_address >= 0x40000000ULL) {
+        event_record("memory", "page_tables", "map_virtual", EVENT_DENIED,
+                     event_current(), "deny:invalid-virtual-page");
+        return 0;
+    }
+
+    volatile uint64_t *pml4 = (volatile uint64_t *)cr3;
+    volatile uint64_t *pdpt = (volatile uint64_t *)(pml4[0] & 0x000FFFFFFFFFF000ULL);
+    volatile uint64_t *pd = (volatile uint64_t *)(pdpt[0] & 0x000FFFFFFFFFF000ULL);
+    uint64_t pd_index = (virtual_address >> 21) & 0x1FFULL;
+    uint64_t pt_index = (virtual_address >> 12) & 0x1FFULL;
+
+    if ((pd[pd_index] & PTE_PRESENT) == 0) {
+        uint64_t pt_address = page_alloc();
+        if (pt_address == 0) {
+            event_record("memory", "page_tables", "map_virtual", EVENT_DENIED,
+                         event_current(), "deny:no-page-table");
+            return 0;
+        }
+        zero_page(pt_address);
+        pd[pd_index] = pt_address | PTE_PRESENT | PTE_WRITABLE |
+                       (user ? PTE_USER : 0);
+    }
+
+    if (user) {
+        pml4[0] |= PTE_USER;
+        pdpt[0] |= PTE_USER;
+        pd[pd_index] |= PTE_USER;
+    }
+
+    volatile uint64_t *pt = (volatile uint64_t *)(pd[pd_index] & 0x000FFFFFFFFFF000ULL);
+    uint64_t flags = PTE_PRESENT |
+                     (writable ? PTE_WRITABLE : 0) |
+                     (user ? PTE_USER : 0) |
+                     (executable ? 0 : PTE_NX);
+    pt[pt_index] = physical_address | flags;
+    event_record("memory", "page_tables", "map_virtual", EVENT_OK,
+                 event_current(), policy);
+    return 1;
 }
 
 int memory_map_user_page(uint64_t physical_address, int executable) {

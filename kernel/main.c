@@ -141,7 +141,13 @@ static void list_files(void) {
     event_record_kind("ramfs", "ramfs", "list", EVENT_OK, policy.event, policy.reason, "state");
     for (uint32_t i = 0; i < ramfs_file_count(); i++) {
         const struct ramfs_file *file = ramfs_file_at(i);
-        printf("%s%s\n", file->type == RAMFS_FILE_MODULE ? "[module] " : "[file] ", file->path);
+        const char *label = "[file] ";
+        if (file->type == RAMFS_FILE_MODULE) {
+            label = "[module] ";
+        } else if (file->type == RAMFS_FILE_EXECUTABLE) {
+            label = "[bin] ";
+        }
+        printf("%s%s\n", label, file->path);
     }
 }
 

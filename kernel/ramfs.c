@@ -14,10 +14,32 @@ static const uint8_t memory_module[] =
     "# Report allocator state\n"
     "meminfo\n";
 
+static const uint8_t hello_program[] = {
+    0xB8, 0x01, 0x00, 0x00, 0x00,       /* mov eax, 1 ; inspect */
+    0xBF, 0x40, 0x00, 0x40, 0x00,       /* mov edi, 0x400040 */
+    0xCD, 0x80,                         /* int 0x80 */
+    0xB8, 0x02, 0x00, 0x00, 0x00,       /* mov eax, 2 ; yield */
+    0xCD, 0x80,
+    0xB8, 0x03, 0x00, 0x00, 0x00,       /* mov eax, 3 ; config_get */
+    0xBF, 0x48, 0x00, 0x40, 0x00,       /* mov edi, 0x400048 */
+    0xCD, 0x80,
+    0xB8, 0x04, 0x00, 0x00, 0x00,       /* mov eax, 4 ; denied config_set */
+    0xBF, 0x48, 0x00, 0x40, 0x00,       /* mov edi, 0x400048 */
+    0xCD, 0x80,
+    0x48, 0xA1, 0x00, 0x00, 0x60, 0x00, /* mov rax, [0x600000] */
+    0x00, 0x00, 0x00, 0x00,
+    0x90, 0x90, 0x90, 0x90, 0x90,
+    0x90, 0x90, 0x90, 0x90, 0x90,
+    0x90,
+    's', 'y', 's', 't', 'e', 'm', 0x00, 0x00,
+    '/', 'c', 'o', 'n', 'f', 'i', 'g', '/', 't', 'h', 'e', 'm', 'e', 0x00
+};
+
 static const struct ramfs_file files[] = {
     { "/README.TXT", readme, sizeof(readme) - 1, RAMFS_FILE_TEXT },
     { "/modules/ABOUT.MOD", about_module, sizeof(about_module) - 1, RAMFS_FILE_MODULE },
-    { "/modules/MEMORY.MOD", memory_module, sizeof(memory_module) - 1, RAMFS_FILE_MODULE }
+    { "/modules/MEMORY.MOD", memory_module, sizeof(memory_module) - 1, RAMFS_FILE_MODULE },
+    { "/bin/hello", hello_program, sizeof(hello_program), RAMFS_FILE_EXECUTABLE }
 };
 
 int ramfs_init(void) {
@@ -28,7 +50,8 @@ int ramfs_init(void) {
             event_record("ramfs", "ramfs", "initialize", EVENT_FAULT, event_current(), "deny:invalid-file");
             return 0;
         }
-        object_register(files[i].type == RAMFS_FILE_MODULE ? "module" : "file",
+        object_register(files[i].type == RAMFS_FILE_MODULE ? "module" :
+                        (files[i].type == RAMFS_FILE_EXECUTABLE ? "executable" : "file"),
                         files[i].path, parent, "read-only", event_current());
     }
     event_record("ramfs", "ramfs", "initialize", EVENT_OK, event_current(), "allow:boot-filesystem");

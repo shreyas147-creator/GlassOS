@@ -5,7 +5,8 @@
 
 enum ramfs_file_type {
     RAMFS_FILE_TEXT,
-    RAMFS_FILE_MODULE
+    RAMFS_FILE_MODULE,
+    RAMFS_FILE_EXECUTABLE
 };
 
 struct ramfs_file {
